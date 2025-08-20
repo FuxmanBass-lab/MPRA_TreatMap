@@ -1,0 +1,4 @@
+/data/control_activity/*.tsv
+/data/treatments_effect/*.tsv
+/data/*.tsv
+/results/*/*
