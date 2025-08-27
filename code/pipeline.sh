@@ -34,7 +34,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/EBV/gene_annotations.tsv \
   --out ../results/EBV/EBV_mpra_heatmap.png \
   --title "MPRA Differential Activity – EBV" \
-  --kb-step=25000
+  --kb-step=25000 \
+  --gene-track-scale=1.5
 
 
 Rscript 2_plot_heatmap.r \
@@ -46,7 +47,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/EBV/gene_annotations.tsv \
   --out ../results/EBV/EBV_mpra_heatmap_combined.png \
   --title "MPRA Differential Activity – EBV" \
-  --kb-step=25000 --combined
+  --kb-step=25000 --combined \
+  --gene-track-scale=1.5
 
 
 
@@ -86,7 +88,9 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/HCMV/gene_annotations.tsv \
   --out ../results/HCMV/HCMV_mpra_heatmap.png \
   --title "MPRA Differential Activity – HCMV" \
-  --kb-step=25000
+  --kb-step=25000 \
+  --height=18 --width=22 --gene-gap 0.5 -gene-label-nudge 6 --gene-label-padding 1.5 --gene-label-force 1.5
+  
 
 Rscript 2_plot_heatmap.r \
   --matrix ../results/HCMV/hcmv_act_R.csv \
@@ -97,7 +101,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/HCMV/gene_annotations.tsv \
   --out ../results/HCMV/HCMV_mpra_heatmap_combined.png \
   --title "MPRA Differential Activity – HCMV" \
-  --kb-step=25000 --combined
+  --kb-step=25000 --combined \
+  --height=18  --width=22 --gene-gap 0.5 --gene-label-nudge 1 --gene-label-padding 1.5 --gene-label-force 1.5
 
 
 
@@ -137,7 +142,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/KHSV/gene_annotations.tsv \
   --out ../results/KHSV/KHSV_mpra_heatmap.png \
   --title "MPRA Differential Activity – KHSV" \
-  --kb-step=25000
+  --kb-step=25000 \
+  --gene-track-scale=1.5
 
 
 Rscript 2_plot_heatmap.r \
@@ -149,7 +155,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/KHSV/gene_annotations.tsv \
   --out ../results/KHSV/KHSV_mpra_heatmap_combined.png \
   --title "MPRA Differential Activity – KHSV" \
-  --kb-step=25000 --combined
+  --kb-step=25000 --combined \
+  --gene-track-scale=1.5
 
 
 
@@ -189,7 +196,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/VZV/gene_annotations.tsv \
   --out ../results/VZV/VZV_mpra_heatmap.png \
   --title "MPRA Differential Activity – VZV" \
-  --kb-step=25000
+  --kb-step=25000 \
+  --gene-track-scale=1.5
 
 
 Rscript 2_plot_heatmap.r \
@@ -201,7 +209,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/VZV/gene_annotations.tsv \
   --out ../results/VZV/VZV_mpra_heatmap_combined.png \
   --title "MPRA Differential Activity – VZV" \
-  --kb-step=25000 --combined
+  --kb-step=25000 --combined \
+  --gene-track-scale=1.5
 
 
 # HSV1
@@ -239,7 +248,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/HSV1/gene_annotations.tsv \
   --out ../results/HSV1/HSV1_mpra_heatmap.png \
   --title "MPRA Differential Activity – HSV1" \
-  --kb-step=25000
+  --kb-step=25000 \
+  --gene-track-scale=1.5
 
 
 Rscript 2_plot_heatmap.r \
@@ -251,7 +261,8 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/HSV1/gene_annotations.tsv \
   --out ../results/HSV1/HSV1_mpra_heatmap_combined.png \
   --title "MPRA Differential Activity – HSV1 KOS (combined)" \
-  --kb-step=25000 --combined
+  --kb-step=25000 --combined \
+  --gene-track-scale=1.5
 
 
 
@@ -577,7 +588,7 @@ Rscript 1_generate_bed.r \
      --excel=../results/AD1/significant_tiles_sequences.csv \
      --seq-col=sequence \
      --id-col=ID \
-     --accession=AC_000017.1\
+     --accession=OQ518269.1\
      --outdir=../results/AD1/ \
      --prefix=AD1
 
@@ -807,4 +818,54 @@ Rscript 2_plot_heatmap.r \
   --genes-anno ../results/HCMV_BB/gene_annotations.tsv \
   --out ../results/HCMV_BB/HCMV_mpra_heatmap_combined.pdf \
   --title "MPRA Differential Activity – HCMV" \
+  --kb-step=25000 --combined
+
+
+
+# HPV52
+
+python 0_preprocess_tiles.py \
+  --controls-dir ../data/control_activity \
+  --treatments-dir ../data/treatments_effect \
+  --map ../data/strands/hpv52_strands_match.csv \
+  --out ../results/HPV52/hpv52_act_R.csv \
+  --treat-hits-out ../results/HPV52/treatment_hits.csv \
+  --control-lfc 2 \
+  --treat-lfc 0.585 \
+  --dna-threshold 50 \
+  --verbose
+
+python 0_pull_seq.py \
+  --ids ../results/HPV52/treatment_hits.csv \
+  --seqs ../data/all_tiles_seqs.tsv \
+  --out ../results/HPV52/significant_tiles_sequences.csv
+
+
+Rscript 1_generate_bed.r \
+     --excel=../results/HPV52/significant_tiles_sequences.csv \
+     --seq-col=sequence \
+     --id-col=ID \
+     --accession=X74481.1 \
+     --outdir=../results/HPV52/ \
+     --prefix=HPV52
+
+Rscript 2_plot_heatmap.r \
+  --matrix ../results/HPV52/hpv52_act_R.csv \
+  --conditions DMSO,H2O,HeatCtrl,DOX,ABT,Dex,H2O2,Heat,MET,MG,Oligo \
+  --controls DMSO,H2O,HeatCtrl \
+  --order DMSO,ABT,Dex,DOX,MG,Oligo,HeatCtrl,Heat,H2O,H2O2,MET \
+  --genes-bed ../results/HPV52/HPV52_nearby_genes.bed \
+  --out ../results/HPV52/HPV52_mpra_heatmap.png \
+  --title "MPRA Differential Activity – HPV52" \
+  --kb-step=25000
+
+
+Rscript 2_plot_heatmap.r \
+  --matrix ../results/HPV52/hpv52_act_R.csv \
+  --conditions DMSO,H2O,HeatCtrl,DOX,ABT,Dex,H2O2,Heat,MET,MG,Oligo \
+  --controls DMSO,H2O,HeatCtrl \
+  --order DMSO,ABT,Dex,DOX,MG,Oligo,HeatCtrl,Heat,H2O,H2O2,MET \
+  --genes-bed ../results/HPV52/HPV52_nearby_genes.bed \
+  --out ../results/HPV52/HPV52_mpra_heatmap_combined.png \
+  --title "MPRA Differential Activity – HPV52 (combined)" \
   --kb-step=25000 --combined

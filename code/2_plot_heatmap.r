@@ -42,6 +42,17 @@
 #   --kb-step       X-axis major tick step in bp (default: 25000)
 #   --seed          Random seed (default: 42)
 #   --gene-gap      Extra vertical gap between heatmap bands and gene tracks (default: 1.0 units)
+#   --gene-track-scale  Multiply the vertical space allocated to the gene tracks (default: 1.0)
+#   --gene-label-nudge   Multiply the up/down offset of gene labels from arrows (default: 1.0)
+#   --gene-label-padding Multiply repel padding around labels (default: 1.0)
+#   --gene-label-force   Multiply repel force for stronger dispersion (default: 1.0)
+#   --xtext-size        X-axis tick label size in pts (default: 12)
+#   --ytext-size        Y-axis tick/track label size in pts (default: 12)
+#   --xtitle-size       X-axis title size in pts (default: 14)
+#   --ytitle-size       Y-axis title size in pts (default: 14)
+#   --title-size        Plot title size in pts (default: 16)
+#   --legend-title-size Legend title size in pts (default: 12)
+#   --legend-text-size  Legend text size in pts (default: 11)
 #   --combine       If set, combine sense/antisense per condition using max(log2fc)
 #   Note: If --kb-step is 0 or too large for the genome span, the script auto-selects pretty breaks.
 # ------------------------------------------------------------------------------
@@ -101,12 +112,23 @@ parse_args <- function() {
   if (is.null(kv$`genes-anno`))kv$`genes-anno` <- ''
   if (is.null(kv$out))         kv$out <- ''
   if (is.null(kv$title))       kv$title <- 'MPRA Differential Activity – EBV'
-  if (is.null(kv$width))       kv$width <- '14'
-  if (is.null(kv$height))      kv$height <- '8'
+  if (is.null(kv$width))       kv$width <- '18'
+  if (is.null(kv$height))      kv$height <- '22'
   if (is.null(kv$dpi))         kv$dpi <- '300'
   if (is.null(kv$`kb-step`))   kv$`kb-step` <- '25000'
   if (is.null(kv$seed))        kv$seed <- '42'
   if (is.null(kv$`gene-gap`))   kv$`gene-gap` <- '2.0'
+  if (is.null(kv$`gene-track-scale`)) kv$`gene-track-scale` <- '1.0'
+  if (is.null(kv$`gene-label-nudge`))   kv$`gene-label-nudge` <- '1.0'
+  if (is.null(kv$`gene-label-padding`)) kv$`gene-label-padding` <- '1.0'
+  if (is.null(kv$`gene-label-force`))   kv$`gene-label-force` <- '1.0'
+  if (is.null(kv$`xtext-size`))        kv$`xtext-size`        <- '12'
+  if (is.null(kv$`ytext-size`))        kv$`ytext-size`        <- '12'
+  if (is.null(kv$`xtitle-size`))       kv$`xtitle-size`       <- '14'
+  if (is.null(kv$`ytitle-size`))       kv$`ytitle-size`       <- '14'
+  if (is.null(kv$`title-size`))        kv$`title-size`        <- '16'
+  if (is.null(kv$`legend-title-size`)) kv$`legend-title-size` <- '12'
+  if (is.null(kv$`legend-text-size`))  kv$`legend-text-size`  <- '11'
   if (is.null(kv$combine))     kv$combine <- FALSE
 
   # coerce types
@@ -116,6 +138,17 @@ parse_args <- function() {
   kv$kb_step <- as.numeric(kv$`kb-step`)
   kv$seed    <- as.integer(kv$seed)
   kv$gene_gap <- as.numeric(kv$`gene-gap`)
+  kv$gene_track_scale <- as.numeric(kv$`gene-track-scale`)
+  kv$gene_label_nudge   <- as.numeric(kv$`gene-label-nudge`)
+  kv$gene_label_padding <- as.numeric(kv$`gene-label-padding`)
+  kv$gene_label_force   <- as.numeric(kv$`gene-label-force`)
+  kv$xtext_size        <- as.numeric(kv$`xtext-size`)
+  kv$ytext_size        <- as.numeric(kv$`ytext-size`)
+  kv$xtitle_size       <- as.numeric(kv$`xtitle-size`)
+  kv$ytitle_size       <- as.numeric(kv$`ytitle-size`)
+  kv$title_size        <- as.numeric(kv$`title-size`)
+  kv$legend_title_size <- as.numeric(kv$`legend-title-size`)
+  kv$legend_text_size  <- as.numeric(kv$`legend-text-size`)
   kv$combine <- tolower(as.character(kv$combine)) %in% c('1','true','t','yes','y')
 
   # vectors
@@ -168,7 +201,7 @@ if (!opt$combine) {
   ctrl_set <- intersect(ord, opt$controls_vec)
   control_columns <- as.vector(rbind(paste0("log2fc_", ctrl_set), paste0("log2fc_", ctrl_set, "_antisense")))
 } else {
-  # Combine sense and antisense using max(log2fc) per bp
+  # Combine sense and antisense by choosing the value with the larger ABSOLUTE log2fc (preserve sign)
   combined_cols <- character(0)
   for (c in ord) {
     s_col <- paste0("log2fc_", c)
@@ -178,7 +211,16 @@ if (!opt$combine) {
     new_col <- paste0("log2fc_", c, "_combined")
     v1 <- suppressWarnings(as.numeric(mat[[s_col]]))
     v2 <- suppressWarnings(as.numeric(mat[[a_col]]))
-    comb <- ifelse(is.na(v1) & is.na(v2), NA_real_, pmax(v1, v2, na.rm = TRUE))
+    comb <- ifelse(
+      is.na(v1) & is.na(v2), NA_real_,
+      ifelse(
+        is.na(v1), v2,
+        ifelse(
+          is.na(v2), v1,
+          ifelse(abs(v1) >= abs(v2), v1, v2)
+        )
+      )
+    )
     mat[[new_col]] <- comb
     combined_cols <- c(combined_cols, new_col)
   }
@@ -241,16 +283,24 @@ layout <- tibble(
   ymax  = ymid + band_height/2,
   start = min(mat$bp, na.rm=TRUE),
   end   = max(mat$bp, na.rm=TRUE),
-  # Pretty labels matching legacy text, updated for combine
+  # Pretty labels (track titles): strand as (+)/(-), treatments as "<cond> treatment (+/-)", no "+" between cond and "treatment"
   label = if (!opt$combine) {
-    ifelse(grepl("_antisense$", condition),
-           paste(sub("^log2fc_", "", sub("_antisense$", "", condition)),
-                ifelse(condition %in% control_columns, "antisense", "+ treatment antisense")),
-           paste(sub("^log2fc_", "", condition),
-                ifelse(condition %in% control_columns, "sense", "+ treatment sense")))
+    # Non-combined: append strand as (+) / (-); for treatments, use "<cond> treatment (+/-)"
+    ifelse(
+      grepl("_antisense$", condition),
+      paste(
+        sub("^log2fc_", "", sub("_antisense$", "", condition)),
+        ifelse(condition %in% control_columns, "(-)", "treatment (-)")
+      ),
+      paste(
+        sub("^log2fc_", "", condition),
+        ifelse(condition %in% control_columns, "(+)", "treatment (+)")
+      )
+    ) |> trimws()
   } else {
+    # Combined: no strand suffix; for treatments, remove the "+" and use "<cond> treatment"
     base <- sub("^log2fc_", "", sub("_combined$", "", condition))
-    ifelse(condition %in% control_columns, base, paste(base, "+ treatment"))
+    ifelse(condition %in% control_columns, base, paste(base, "treatment"))
   }
 )
 lowest_y <- min(layout$ymin)
@@ -372,17 +422,21 @@ if (nzchar(opt$`genes-anno`)) {
 # Build sense/antisense gene rows & compute positions like legacy
 genes <- NULL
 if (!is.null(manual)) {
-  gene_top_base <- 1.0 + opt$gene_gap
-  gene_bottom_base <- 3.0 + opt$gene_gap
+  # Scale-only control for the gene track vertical space (does not change heatmap band spacing)
+  gt_scale <- ifelse(is.null(opt$gene_track_scale) || is.na(opt$gene_track_scale), 1.0, opt$gene_track_scale)
+  gene_top_base <- (1.0 + opt$gene_gap) * gt_scale
+  gene_bottom_base <- (3.0 + opt$gene_gap) * gt_scale
+  per_subrow_gap <- 1.5 * gt_scale
+
   sense_df <- manual %>% filter(strand == "+") %>%
     mutate(xmid = (start + end)/2,
            subrow = (floor(xmid/1000) %% 3) + 1,
-           track  = lowest_y - gene_top_base - (subrow-1)*1.5,
+           track  = lowest_y - gene_top_base - (subrow-1)*per_subrow_gap,
            strand = "+")
   antisense_df <- manual %>% filter(strand == "-") %>%
     mutate(xmid = (start + end)/2,
            subrow = (floor(xmid/1000) %% 4) + 1,
-           track  = lowest_y - gene_bottom_base - (subrow-1)*1.5,
+           track  = lowest_y - gene_bottom_base - (subrow-1)*per_subrow_gap,
            strand = "-")
   genes <- bind_rows(sense_df, antisense_df)
   if (!is.null(annots)) {
@@ -393,7 +447,7 @@ if (!is.null(manual)) {
     genes <- genes %>% mutate(stage = NA_character_, is_latent = NA)
   }
   genes <- genes %>% mutate(
-    nudge_offset = ifelse(strand == "+", 0.5, -0.5),
+    nudge_offset = ifelse(strand == "+", 0.5, -0.5) * ifelse(is.na(opt$gene_label_nudge), 1.0, opt$gene_label_nudge),
     hjust        = ifelse(strand == "+", 0, 1)
   )
 }
@@ -478,16 +532,18 @@ if (!is.null(genes)) {
     ggrepel::geom_text_repel(
       data = genes,
       aes(x = xmid, y = track, label = gene_id, color = stage, hjust = hjust),
-      direction     = "both",
-      nudge_y       = genes$nudge_offset,
-      segment.size  = 0.2,
-      segment.color = "grey50",
-      box.padding   = 0.4,
-      point.padding = 0.2,
-      force         = 1,
-      max.overlaps  = Inf,
-      size          = 3,
-      inherit.aes   = FALSE
+      direction        = "both",
+      nudge_y          = genes$nudge_offset,
+      segment.size     = 0.2,
+      segment.color    = "grey50",
+      min.segment.length = 0,  # allow short leader lines so labels can move freely
+      box.padding      = 0.4 * ifelse(is.na(opt$gene_label_padding), 1.0, opt$gene_label_padding),
+      point.padding    = 0.2 * ifelse(is.na(opt$gene_label_padding), 1.0, opt$gene_label_padding),
+      force            = 1   * ifelse(is.na(opt$gene_label_force),   1.0, opt$gene_label_force),
+      max.overlaps     = Inf,
+      size             = 3,
+      seed             = opt$seed,
+      inherit.aes      = FALSE
     )
 
   if (has_annots) {
@@ -545,11 +601,15 @@ p <- p +
   coord_cartesian(expand = FALSE) +
   theme_classic(base_size = 13) +
   theme(
-    axis.text.y     = element_text(size = 10),
-    axis.title.x    = element_text(margin = margin(t = 10)),
-    plot.title      = element_text(size = 14, face = "bold", hjust = 0.5),
-    legend.position = "right",
-    panel.grid      = element_blank()
+    axis.text.y      = element_text(size = opt$ytext_size),
+    axis.text.x      = element_text(size = opt$xtext_size),
+    axis.title.x     = element_text(size = opt$xtitle_size, margin = margin(t = 10)),
+    axis.title.y     = element_text(size = opt$ytitle_size),
+    plot.title       = element_text(size = opt$title_size, face = "bold", hjust = 0.5),
+    legend.title     = element_text(size = opt$legend_title_size),
+    legend.text      = element_text(size = opt$legend_text_size),
+    legend.position  = "right",
+    panel.grid       = element_blank()
   )
 
 print(p)

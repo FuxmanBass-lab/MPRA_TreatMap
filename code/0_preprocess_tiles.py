@@ -12,6 +12,7 @@ Inputs
      - padj:      one of {padj, qvalue, q_value}
      - coverage:   require ctrl_mean >= 50 (configurable via --dna-threshold)
    Thresholds for **controls** (AND): padj < 0.05, log2FC > 2.0
+     - complement rule: if a tile passes thresholds, also include its complementary strand (ignore its padj/log2FC and coverage; include its lfc if available)
    If multiple files correspond to the same base label (e.g. DMSO1/2/3),
    they are collapsed to a single column by taking the maximum log2FC
    among files that pass thresholds (done separately for sense/antisense).
@@ -24,8 +25,7 @@ Inputs
      - coverage:   require dna_mean  >= 50 (configurable via --dna-threshold)
    Thresholds for **treatments**:
      - primary keep: padj < 0.25 and |log2FC| >= 0.5
-     - complement rule: if a tile passes primary keep, also include its
-       complementary strand **if** its padj < 0.25 (log2FC can be anything)
+     - complement rule: if a tile passes primary keep, also include its complementary strand (ignore its padj/log2FC and coverage; include its lfc if available)
      - replicate activity gate (per treatment file):
          • compute mean of control replicates and mean of treatment replicates from columns like B2_DMSO_r1_activity, ...
          • take max(mean_control, mean_treatment) and require it > 2 (rows failing this are discarded)
@@ -370,35 +370,77 @@ def merge_controls(controls_dir: str, sense2anti, anti2sense, id2bp,
         sense_acc = sense_by_label[label]
         anti_acc  = anti_by_label[label]
 
-        kept_rows = 0
+        # Stage records
+        recs_pass: Dict[str, float] = {}   # tiles passing coverage + stats; value is lfc
+        recs_all: Dict[str, float] = {}    # any tile seen with an lfc, regardless of coverage/stats
+        scanned = 0
+        passed = 0
         for r in rows:
             if max(id_i, lfc_i, pad_i) >= len(r):
                 continue
-            tid  = r[id_i].strip()
+            tid = r[id_i].strip()
             if tid not in id2bp:
                 continue
-            # Coverage filter
+            lfc = to_float(r[lfc_i])
+            padj = to_float(r[pad_i])
+            if lfc is not None:
+                # remember any lfc observed even if later gates fail
+                prev_any = recs_all.get(tid)
+                recs_all[tid] = lfc if prev_any is None or abs(lfc) > abs(prev_any) else prev_any
+            scanned += 1
+            # coverage gate (controls use ctrl_mean), skip if missing/low
             cov = to_float(r[cov_i]) if cov_i is not None and cov_i < len(r) else None
             if cov is None or cov < dna_thr:
                 continue
-            lfc  = to_float(r[lfc_i])
-            padj = to_float(r[pad_i])
+            # stats gate
             if lfc is None or padj is None:
                 continue
             if not (padj < padj_thr and lfc > lfc_thr):
                 continue
-            bp = id2bp[tid]
+            # passed
+            prev_pass = recs_pass.get(tid)
+            recs_pass[tid] = lfc if prev_pass is None or abs(lfc) > abs(prev_pass) else prev_pass
+            passed += 1
+
+        # Build inclusion set: all primary pass + their complements (unconditional)
+        primary_pass = set(recs_pass.keys())
+        include = set(primary_pass)
+        for tid in list(primary_pass):
+            comp = sense2anti.get(tid) or anti2sense.get(tid)
+            if comp:
+                include.add(comp)
+
+        # Emit into sense/anti accumulators; for complements, use lfc from recs_pass if present else recs_all;
+        # if still missing (complement absent), MIRROR the primary's lfc.
+        kept_rows = 0
+        for tid in include:
+            src_lfc = recs_pass.get(tid)
+            if src_lfc is None:
+                src_lfc = recs_all.get(tid)
+            if src_lfc is None:
+                # try mirroring from its primary pair
+                # if tid is antisense, primary may be its sense; if tid is sense, primary may be its antisense
+                prim = anti2sense.get(tid) or sense2anti.get(tid)
+                if prim in primary_pass and prim in recs_pass:
+                    src_lfc = recs_pass[prim]
+            if src_lfc is None:
+                continue
+            bp = id2bp.get(tid)
+            if bp is None:
+                continue
             if tid in sense2anti:
                 old = sense_acc.get(bp)
-                if old is None or lfc > old:
-                    sense_acc[bp] = lfc
+                if old is None or abs(src_lfc) > abs(old):
+                    sense_acc[bp] = src_lfc
+                    kept_rows += 1
             elif tid in anti2sense:
                 old = anti_acc.get(bp)
-                if old is None or lfc > old:
-                    anti_acc[bp] = lfc
-            kept_rows += 1
+                if old is None or abs(src_lfc) > abs(old):
+                    anti_acc[bp] = src_lfc
+                    kept_rows += 1
+
         if verbose:
-            print(f"[controls] {label}: kept {kept_rows}", file=sys.stderr)
+            print(f"[controls] {label}: scanned {scanned}; primary {len(primary_pass)}; kept {kept_rows} (complements unconditional)", file=sys.stderr)
 
     return (sense_by_label, anti_by_label), labels
 
@@ -418,6 +460,7 @@ def merge_treatments(treat_dir: str, sense2anti, anti2sense, id2bp,
                      padj_thr: float, lfc_thr: float, dna_thr: float, verbose: bool=False):
     # per-label best records
     label_best: Dict[str, Dict[str, Tuple[float, float]]] = {}
+    label_any: Dict[str, Dict[str, Tuple[float, float]]] = {}
 
     files = sorted([str(p) for p in Path(treat_dir).glob("*.tsv")] +
                    [str(p) for p in Path(treat_dir).glob("*.csv")])
@@ -445,6 +488,7 @@ def merge_treatments(treat_dir: str, sense2anti, anti2sense, id2bp,
             continue
 
         raw_label = label_from_treatment_fname(f)
+        any_map = label_any.setdefault(raw_label, {})
         # Detect replicate activity columns and pick control/treatment sets for this file
         cond2idx = detect_activity_replicates(hdr)  # keys are canonical already
         # --- VERBOSE DEBUGGING OF REPLICATE DETECTION ---
@@ -492,26 +536,27 @@ def merge_treatments(treat_dir: str, sense2anti, anti2sense, id2bp,
             tid  = r[id_i].strip()
             if tid not in id2bp:
                 continue
+            lfc  = to_float(r[lfc_i])
+            padj = to_float(r[pad_i])
+            if lfc is not None:
+                prev_any = any_map.get(tid)
+                cur_any = (lfc, padj)
+                any_map[tid] = cur_any if prev_any is None else best_of_records(prev_any, cur_any)
             # DNA coverage filter
             if dna_i is not None:
                 dna_v = to_float(r[dna_i]) if dna_i < len(r) else None
                 if dna_v is None or dna_v < dna_thr:
                     continue
             else:
-                # if column missing, we accept the row (already warned above)
                 pass
             # Replicate activity gate: require max(mean_ctrl, mean_treat) > 2 (only if gate is defined)
             if gate_defined:
                 mc = mean_cols(r, ctrl_cols) if ctrl_cols else None
                 mt = mean_cols(r, treat_cols) if treat_cols else None
-                # Require at least one of the means; if you want BOTH, uncomment next line and remove the line after
-                # if mc is None or mt is None: continue
                 candidates = [x for x in (mc, mt) if x is not None]
                 if not candidates or max(candidates) <= 2.0:
                     continue
                 passed_activity += 1
-            lfc  = to_float(r[lfc_i])
-            padj = to_float(r[pad_i])
             if lfc is None or padj is None:
                 continue
             cur = (lfc, padj)
@@ -537,13 +582,11 @@ def merge_treatments(treat_dir: str, sense2anti, anti2sense, id2bp,
             if padj is not None and padj < padj_thr and abs(lfc) >= lfc_thr
         }
         include = set(primary_pass)
-        # complement rule
+        # Complement rule: ALWAYS include complementary strand (ignore its stats/coverage); use fallback from any_map if needed
         for tid in list(primary_pass):
             comp = sense2anti.get(tid) or anti2sense.get(tid)
-            if comp and comp in recs:
-                lfc_c, pad_c = recs[comp]
-                if pad_c is not None and pad_c < padj_thr:
-                    include.add(comp)
+            if comp:
+                include.add(comp)
         # record per-ID treatment hits
         for tid in include:
             s = hits_per_id.setdefault(tid, set())
@@ -551,7 +594,15 @@ def merge_treatments(treat_dir: str, sense2anti, anti2sense, id2bp,
         s_map: Dict[int, float] = {}
         a_map: Dict[int, float] = {}
         for tid in include:
-            lfc, _ = recs[tid]
+            src = recs.get(tid) or label_any.get(label, {}).get(tid)
+            if src is None:
+                # mirror from primary partner if present
+                prim = anti2sense.get(tid) or sense2anti.get(tid)
+                if prim in primary_pass:
+                    src = recs.get(prim) or label_any.get(label, {}).get(prim)
+            if src is None:
+                continue
+            lfc, _ = src
             bp = id2bp.get(tid)
             if bp is None:
                 continue
