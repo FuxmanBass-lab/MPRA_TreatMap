@@ -165,6 +165,50 @@ def to_float(x: str) -> Optional[float]:
         return None
 
 # -------------------------
+# Neighbor/complement gate helper (top-level; used by assemble_and_write)
+# -------------------------
+from typing import Dict, List, Tuple
+
+def _apply_neighbor_gate_per_label(s_map: Dict[int, float],
+                                   a_map: Dict[int, float],
+                                   all_bps_sorted: List[int]) -> Tuple[Dict[int, float], Dict[int, float]]:
+    """Filter s_map/a_map so each kept entry at bp satisfies one of:
+       (1) same-strand next bp active; (2) complement at same bp active; (3) complement at next bp active.
+    """
+    if not s_map and not a_map:
+        return s_map, a_map
+    bp_index = {bp: i for i, bp in enumerate(all_bps_sorted)}
+    def ok_s(bp: int) -> bool:
+        i = bp_index.get(bp)
+        if i is None:
+            return False
+        if bp in a_map:
+            return True
+        if i + 1 < len(all_bps_sorted):
+            nbp = all_bps_sorted[i + 1]
+            if nbp in s_map:
+                return True
+            if nbp in a_map:
+                return True
+        return False
+    def ok_a(bp: int) -> bool:
+        i = bp_index.get(bp)
+        if i is None:
+            return False
+        if bp in s_map:
+            return True
+        if i + 1 < len(all_bps_sorted):
+            nbp = all_bps_sorted[i + 1]
+            if nbp in a_map:
+                return True
+            if nbp in s_map:
+                return True
+        return False
+    s_keep = {bp: v for bp, v in s_map.items() if ok_s(bp)}
+    a_keep = {bp: v for bp, v in a_map.items() if ok_a(bp)}
+    return s_keep, a_keep
+
+# -------------------------
 # Activity replicate detection utilities (for treatment files)
 # -------------------------
 import re
@@ -180,7 +224,7 @@ ACTIVITY_PATTERNS = [
     re.compile(r"^([A-Za-z0-9.+-]+)[_.-](?:r|rep)\s*0*(\d+)(?:[_.-]activity.*)?$", re.IGNORECASE),
 ]
 
-KNOWN_CONTROLS = ["DMSO","H2O","HeatCtrl","CONTROL"]
+KNOWN_CONTROLS = ["DMSO","H2O","HeatCtrl","CONTROL","Kwater","Awater"]
 
 # Canonicalize condition tokens seen in replicate activity column names and filenames
 # e.g., "heat" -> "HeatCtrl", "ctrl" -> "CONTROL", "water" -> "H2O"
@@ -194,6 +238,8 @@ COND_ALIASES = {
     "heat": "Heat",
     "ctrl": "CONTROL",
     "control": "CONTROL",
+    "Kwater":"Kwater",
+    "Awater":"Awater"
 }
 
 def canon_cond(token: str) -> str:
@@ -625,11 +671,28 @@ def assemble_and_write(out_csv: str,
                         treats_s: Dict[str, Dict[int, float]],
                         treats_a: Dict[str, Dict[int, float]],
                         t_labels: List[str],
-                        id2bp: Dict[str, int], verbose: bool=False, drop_empty: bool=False):
+                        id2bp: Dict[str, int], verbose: bool=False, drop_empty: bool=False,
+                        require_neighbor_active: bool=False):
     sense_ctrl, anti_ctrl = controls
 
     # All bps that appear in the map (keeps full axis)
     all_bps = sorted({bp for bp in id2bp.values()})
+
+    if require_neighbor_active:
+        # Apply neighbor/complement filter to control labels
+        for lab in list(c_labels):
+            s_map = sense_ctrl.get(lab, {})
+            a_map = anti_ctrl.get(lab, {})
+            s_keep, a_keep = _apply_neighbor_gate_per_label(s_map, a_map, all_bps)
+            sense_ctrl[lab] = s_keep
+            anti_ctrl[lab]  = a_keep
+        # Apply to treatment labels
+        for lab in list(t_labels):
+            s_map = treats_s.get(lab, {})
+            a_map = treats_a.get(lab, {})
+            s_keep, a_keep = _apply_neighbor_gate_per_label(s_map, a_map, all_bps)
+            treats_s[lab] = s_keep
+            treats_a[lab] = a_keep
 
     # Column order: controls (alpha) then treatments (alpha)
     c_labels = sorted(set(c_labels))
@@ -701,6 +764,8 @@ def parse_args(argv: Optional[List[str]] = None):
     p.add_argument("--dna-threshold", type=float, default=50.0, help="Minimum DNA coverage (ctrl_mean for controls, dna_mean for treatments)")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--drop-empty-rows", action="store_true", help="If set, omit rows where all control/treatment values are empty")
+    p.add_argument("--require-neighbor-active", action="store_true",
+                   help="If set, only include tiles that have either: (i) the next tile on the SAME strand also active, or (ii) the complementary strand at the same bp active, or (iii) the complementary strand at the next bp active. Applied per label/class.")
     return p.parse_args(argv)
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -727,7 +792,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         padj_thr=a.treat_padj, lfc_thr=a.treat_lfc, dna_thr=a.dna_threshold, verbose=a.verbose
     )
 
-    assemble_and_write(a.out, (ctrl_s, ctrl_a), c_labels, tr_s, tr_a, t_labels, id2bp, verbose=a.verbose, drop_empty=a.drop_empty_rows)
+    assemble_and_write(a.out, (ctrl_s, ctrl_a), c_labels, tr_s, tr_a, t_labels, id2bp,
+                       verbose=a.verbose, drop_empty=a.drop_empty_rows,
+                       require_neighbor_active=a.require_neighbor_active)
     if a.treat_hits_out:
         write_treatment_hits(a.treat_hits_out, hits_per_id)
     return 0
