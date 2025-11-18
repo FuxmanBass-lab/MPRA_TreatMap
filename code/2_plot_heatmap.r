@@ -112,24 +112,26 @@ parse_args <- function() {
   if (is.null(kv$`genes-anno`))kv$`genes-anno` <- ''
   if (is.null(kv$out))         kv$out <- ''
   if (is.null(kv$title))       kv$title <- 'MPRA Differential Activity – EBV'
-  if (is.null(kv$width))       kv$width <- '18'
-  if (is.null(kv$height))      kv$height <- '22'
+  if (is.null(kv$width))       kv$width <- '22'   # poster wide
+  if (is.null(kv$height))      kv$height <- '14'  # still landscape but taller than before
   if (is.null(kv$dpi))         kv$dpi <- '300'
   if (is.null(kv$`kb-step`))   kv$`kb-step` <- '25000'
   if (is.null(kv$seed))        kv$seed <- '42'
-  if (is.null(kv$`gene-gap`))   kv$`gene-gap` <- '2.0'
+  if (is.null(kv$`gene-gap`))   kv$`gene-gap` <- '1.0'  # pull genes closer to tracks
   if (is.null(kv$`gene-track-scale`)) kv$`gene-track-scale` <- '1.0'
   if (is.null(kv$`gene-label-nudge`))   kv$`gene-label-nudge` <- '1.0'
   if (is.null(kv$`gene-label-padding`)) kv$`gene-label-padding` <- '1.0'
   if (is.null(kv$`gene-label-force`))   kv$`gene-label-force` <- '1.0'
-  if (is.null(kv$`xtext-size`))        kv$`xtext-size`        <- '12'
-  if (is.null(kv$`ytext-size`))        kv$`ytext-size`        <- '12'
-  if (is.null(kv$`xtitle-size`))       kv$`xtitle-size`       <- '14'
-  if (is.null(kv$`ytitle-size`))       kv$`ytitle-size`       <- '14'
-  if (is.null(kv$`title-size`))        kv$`title-size`        <- '16'
-  if (is.null(kv$`legend-title-size`)) kv$`legend-title-size` <- '12'
-  if (is.null(kv$`legend-text-size`))  kv$`legend-text-size`  <- '11'
+  if (is.null(kv$`xtext-size`))        kv$`xtext-size`        <- '18'
+  if (is.null(kv$`ytext-size`))        kv$`ytext-size`        <- '20'
+  if (is.null(kv$`xtitle-size`))       kv$`xtitle-size`       <- '20'
+  if (is.null(kv$`ytitle-size`))       kv$`ytitle-size`       <- '20'
+  if (is.null(kv$`title-size`))        kv$`title-size`        <- '28'
+  if (is.null(kv$`legend-title-size`)) kv$`legend-title-size` <- '18'
+  if (is.null(kv$`legend-text-size`))  kv$`legend-text-size`  <- '16'
   if (is.null(kv$combine))     kv$combine <- FALSE
+  if (is.null(kv$`control-line`)) kv$`control-line` <- FALSE
+  if (is.null(kv$`control-line-scale`)) kv$`control-line-scale` <- '0.15'
 
   # coerce types
   kv$width   <- as.numeric(kv$width)
@@ -149,6 +151,8 @@ parse_args <- function() {
   kv$title_size        <- as.numeric(kv$`title-size`)
   kv$legend_title_size <- as.numeric(kv$`legend-title-size`)
   kv$legend_text_size  <- as.numeric(kv$`legend-text-size`)
+  kv$control_line <- tolower(as.character(kv$`control-line`)) %in% c('1','true','t','yes','y')
+  kv$control_line_scale <- as.numeric(kv$`control-line-scale`)
   kv$combine <- tolower(as.character(kv$combine)) %in% c('1','true','t','yes','y')
 
   # vectors
@@ -180,6 +184,22 @@ suppressPackageStartupMessages({
 })
 
 # -------------------------
+# Pretty condition names
+# -------------------------
+pretty_names <- c(
+  H2O   = "Water",
+  DMSO  = "DMSO",
+  Dex   = "Dexamethasone",
+  ABT   = "ABT-737",
+  DOX   = "Doxorubicin",
+  H2O2  = "Hydrogen Peroxide",
+  MG    = "MG-132",
+  Oligo = "Oligomycin",
+  Heat  = "42C",
+  HeatCtrl = "37C"
+)
+
+# -------------------------
 # Load matrix, derive columns
 # -------------------------
 mat <- read.csv(opt$matrix, stringsAsFactors = FALSE, check.names = FALSE)
@@ -193,7 +213,6 @@ ord <- intersect(opt$order_vec, opt$conditions_vec)
 
 # Build column order: sense/antisense or combined
 if (!opt$combine) {
-  # Build column order: each condition → sense, antisense
   column_order <- as.vector(rbind(paste0("log2fc_", ord), paste0("log2fc_", ord, "_antisense")))
   missing <- setdiff(column_order, names(mat))
   if (length(missing) > 0) stop("Missing columns in --matrix: ", paste(missing, collapse=", "))
@@ -235,8 +254,9 @@ data_long <- mat %>%
   pivot_longer(-bp, names_to = "condition", values_to = "log2fc") %>%
   mutate(
     condition = factor(condition, levels = column_order),
-    type      = ifelse(condition %in% control_columns, "control", "treatment"),
-    log2fc    = as.numeric(log2fc)
+    strand = ifelse(grepl("_antisense$", condition), "antisense", "sense"),
+    type = ifelse(condition %in% control_columns, "control", "treatment"),
+    log2fc = as.numeric(log2fc)
   ) %>%
   filter(!is.na(log2fc))
 
@@ -245,31 +265,49 @@ data_long <- mat %>%
 # -------------------------
 band_height <- 1
 gap_within  <- 0.15   # between sense/antisense pairs
-gap_between <- 0.5    # between control block and treatment block
+# make the gap between controls and treatments smaller so the top block doesn't float
+gap_between <- if (isTRUE(opt$control_line)) gap_within else 0.5
 
+# Control band height for both band and step: make controls 3x taller than treatments
+control_band_height <- 2.4 * band_height
+
+#
 # Place the big gap *after the last control band in the actual layout order*,
 # even if controls are interleaved or ordered arbitrarily.
 ctrl_band_indices <- match(control_columns, column_order)
 ctrl_band_indices <- ctrl_band_indices[!is.na(ctrl_band_indices)]
 last_ctrl_idx <- if (length(ctrl_band_indices) > 0) max(ctrl_band_indices) else 0
 
+## Build ymid with special handling for control antisense: 0 height, no gap after
 pos <- 0; ymid <- c()
 for (i in seq_along(column_order)) {
+  this_cond <- column_order[i]
+  is_ctrl_band <- this_cond %in% control_columns
+  is_ctrl_antisense <- grepl("_antisense$", this_cond) && sub("_antisense$", "", this_cond) %in% paste0("log2fc_", opt$controls_vec)
+
+  # sense control: double height, control antisense: 0 height (we collapse it onto sense later)
+  this_h <- if (is_ctrl_antisense) 0 else if (is_ctrl_band) control_band_height else band_height
+
   ymid <- c(ymid, pos)
-  pos  <- pos - band_height
+  pos  <- pos - this_h
 
   # Decide the gap after this band
   if (i < length(column_order)) {
     if (last_ctrl_idx > 0 && i == last_ctrl_idx) {
-      # Big gap between control block and treatment block
       pos <- pos - gap_between
     } else {
-      # Within-block gap
       if (!opt$combine) {
-        # In split mode, apply the within-gap after every sense/antisense pair
-        if (i %% 2 == 0) pos <- pos - gap_within
+        # after control antisense (collapsed row), still add a regular gap so spacing stays consistent
+        if (is_ctrl_antisense) {
+          pos <- pos - gap_within
+        } else if (i %% 2 == 0) {
+          prev_cond <- column_order[i-1]
+          curr_cond <- column_order[i]
+          if (!(prev_cond %in% control_columns && curr_cond %in% control_columns)) {
+            pos <- pos - gap_within
+          }
+        }
       } else {
-        # In combined mode, apply the same within-gap after every band
         pos <- pos - gap_within
       }
     }
@@ -279,30 +317,45 @@ layout <- tibble(
   condition = factor(column_order, levels = column_order),
   ymid      = ymid
 ) %>% mutate(
-  ymin  = ymid - band_height/2,
-  ymax  = ymid + band_height/2,
+  # Use band height for each band; controls use control_band_height
+  is_control = condition %in% control_columns,
+  band_h = ifelse(is_control, control_band_height, band_height),
+  ymin  = ymid - band_h/2,
+  ymax  = ymid + band_h/2,
   start = min(mat$bp, na.rm=TRUE),
   end   = max(mat$bp, na.rm=TRUE),
-  # Pretty labels (track titles): strand as (+)/(-), treatments as "<cond> treatment (+/-)", no "+" between cond and "treatment"
+  # Pretty labels (track titles): use pretty_names mapping
   label = if (!opt$combine) {
-    # Non-combined: append strand as (+) / (-); for treatments, use "<cond> treatment (+/-)"
+    base <- sub("^log2fc_", "", condition)
+    base <- sub("_antisense$", "", base)
+    # map to pretty name if available
+    pretty_base <- ifelse(base %in% names(pretty_names), pretty_names[base], base)
     ifelse(
       grepl("_antisense$", condition),
-      paste(
-        sub("^log2fc_", "", sub("_antisense$", "", condition)),
-        ifelse(condition %in% control_columns, "(-)", "treatment (-)")
-      ),
-      paste(
-        sub("^log2fc_", "", condition),
-        ifelse(condition %in% control_columns, "(+)", "treatment (+)")
-      )
+      paste(pretty_base, ifelse(condition %in% control_columns, "(-)", "(-)")),
+      paste(pretty_base, ifelse(condition %in% control_columns, "(+)", "(+)"))
     ) |> trimws()
   } else {
-    # Combined: no strand suffix; for treatments, remove the "+" and use "<cond> treatment"
-    base <- sub("^log2fc_", "", sub("_combined$", "", condition))
-    ifelse(condition %in% control_columns, base, paste(base, "treatment"))
+    base <- sub("^log2fc_", "", condition)
+    base <- sub("_combined$", "", base)
+    pretty_base <- ifelse(base %in% names(pretty_names), pretty_names[base], base)
+    pretty_base
   }
 )
+
+# Collapse control antisense rows onto the sense row for visual alignment
+if (length(opt$controls_vec) > 0) {
+  for (cc in opt$controls_vec) {
+    s_name <- paste0("log2fc_", cc)
+    a_name <- paste0("log2fc_", cc, "_antisense")
+    if (s_name %in% layout$condition & a_name %in% layout$condition) {
+      sense_row <- layout[layout$condition == s_name, ]
+      layout[layout$condition == a_name, c("ymid","ymin","ymax")] <- sense_row[1, c("ymid","ymin","ymax")]
+      # hide duplicate label on antisense control
+      layout$label[layout$condition == a_name] <- ""
+    }
+  }
+}
 lowest_y <- min(layout$ymin)
 
 # Separator line y between control block and first treatment band
@@ -422,11 +475,11 @@ if (nzchar(opt$`genes-anno`)) {
 # Build sense/antisense gene rows & compute positions like legacy
 genes <- NULL
 if (!is.null(manual)) {
-  # Scale-only control for the gene track vertical space (does not change heatmap band spacing)
+  # make gene panel visually lighter/smaller
   gt_scale <- ifelse(is.null(opt$gene_track_scale) || is.na(opt$gene_track_scale), 1.0, opt$gene_track_scale)
-  gene_top_base <- (1.0 + opt$gene_gap) * gt_scale
-  gene_bottom_base <- (3.0 + opt$gene_gap) * gt_scale
-  per_subrow_gap <- 1.5 * gt_scale
+  gene_top_base <- (0.5 + opt$gene_gap) * gt_scale
+  gene_bottom_base <- (1.4 + opt$gene_gap) * gt_scale
+  per_subrow_gap <- 1.0 * gt_scale
 
   sense_df <- manual %>% filter(strand == "+") %>%
     mutate(xmid = (start + end)/2,
@@ -461,24 +514,102 @@ p <- ggplot() +
   # (A) grey bands
   geom_rect(data = layout, inherit.aes = FALSE,
             aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax),
-            fill = "#F7F7F7") +
+            fill = "#F7F7F7")
 
-  # (B) control bars (green gradient)
-  geom_segment(
-    data = left_join(filter(data_long, type == "control"), layout, by = "condition"),
-    aes(x = bp, xend = bp, y = ymin, yend = ymax, color = log2fc),
-    linewidth = 0.9, lineend = "butt"
-  ) +
-  scale_color_gradientn(
-    colors = c("#edf8e9",
-"#bae4b3","#74c476","#31a354","#006d2c"),
-    values = scales::rescale(c(3,3.5,4.5,5)),
-    limits = c(1,6), oob = scales::squish,
-    na.value = "white",
-    name = expression(log[2]*"FC (control)")
-  ) +
+# (B) control tracks: either heatmap-style bars (legacy) or line plots
+if (!opt$control_line) {
+  p <- p +
+    geom_segment(
+      data = left_join(filter(data_long, type == "control"), layout, by = "condition"),
+      aes(x = bp, xend = bp, y = ymin, yend = ymax, color = log2fc),
+      linewidth = 0.9, lineend = "butt"
+    ) +
+    scale_color_gradientn(
+      colors = c("#edf8e9",
+                  "#bae4b3","#74c476","#31a354","#006d2c"),
+      values = scales::rescale(c(3,3.5,4.5,5)),
+      limits = c(1,6), oob = scales::squish,
+      na.value = "white",
+      name = expression(log[2]*"FC (control)")
+    )
+} else {
+  # base control df with track positions for controls (including zeros)
+  base_ctrl <- left_join(filter(data_long, type == "control"), layout, by = "condition") %>%
+    mutate(
+      track_mid = (ymin + ymax) / 2,
+      is_antisense = strand == "antisense"
+    )
+
+  # we want a row for every bp in the matrix for every control track so the line can drop to baseline
+  control_conds <- unique(base_ctrl$condition)
+  all_bp <- sort(unique(mat$bp))
+  ctrl_df <- lapply(control_conds, function(cc) {
+    lay <- layout[layout$condition == cc, ][1, ]
+    this_mid <- (lay$ymin + lay$ymax) / 2
+    this_rows <- base_ctrl[base_ctrl$condition == cc, c("bp", "log2fc", "strand")]
+    full_df <- data.frame(
+      bp = all_bp,
+      condition = cc,
+      log2fc = 0,
+      strand = unique(this_rows$strand)[1]
+    )
+    # overwrite zeros with actual values where present
+    full_df$log2fc[match(this_rows$bp, full_df$bp)] <- this_rows$log2fc
+    full_df <- full_df %>% mutate(
+      ymin = lay$ymin,
+      ymax = lay$ymax,
+      track_mid = this_mid,
+      is_antisense = strand == "antisense",
+      peak_h = pmin(abs(log2fc) * opt$control_line_scale, (lay$ymax - lay$ymin) / 2 - 0.03),
+      y1 = ifelse(is_antisense, this_mid - peak_h, this_mid + peak_h)
+    )
+    full_df
+  }) %>% dplyr::bind_rows()
+
+  # Add baseline at track mid for each control condition
+  p <- p +
+    geom_segment(
+      data = distinct(ctrl_df, condition, track_mid, bp) %>% group_by(condition) %>% summarise(track_mid = first(track_mid), start = min(bp), end = max(bp), .groups = "drop"),
+      aes(x = start, xend = end, y = track_mid, yend = track_mid),
+      inherit.aes = FALSE,
+      linewidth = 0.2,
+      color = "#5f5f5f"
+    )
+
+  # draw line that returns to baseline between peaks
+  p <- p +
+    geom_line(
+      data = ctrl_df %>% arrange(condition, bp),
+      aes(x = bp, y = y1, group = condition),
+      inherit.aes = FALSE,
+      linewidth = 0.4,
+      color = "#2a9d8f"
+    )
+
+  # Add right-side ticks to indicate control log2fc scale
+  ctrl_span <- (max(mat$bp, na.rm = TRUE) - min(mat$bp, na.rm = TRUE))
+  right_border <- max(mat$bp, na.rm = TRUE)
+  tick_offset0 <- right_border + ctrl_span * 0.0001   # close to the black border
+  tick_offset1 <- right_border + ctrl_span * 0.004   # short tick length
+  tick_vals <- c(0, 2, 4, 6)
+
+  ctrl_ticks_df <- ctrl_df %>%
+    distinct(condition, ymin, ymax) %>%
+    mutate(
+      track_mid = (ymin + ymax) / 2,
+      max_h = (ymax - ymin) / 2 - 0.03
+    ) %>%
+    tidyr::crossing(tick_val = tick_vals) %>%
+    mutate(
+      rel_h = pmin(tick_val * opt$control_line_scale, max_h),
+      y = track_mid + rel_h,
+      x0 = tick_offset0,
+      x1 = tick_offset1
+    )
+
+}
+p <- p +
   ggnewscale::new_scale_color() +
-
   # (C) treatment bars (diverging)
   geom_segment(
     data = left_join(filter(data_long, type == "treatment"), layout, by = "condition"),
@@ -502,8 +633,8 @@ if (!is.null(genes)) {
       data = genes,
       aes(xmin = start, xmax = end, y = track,
           forward = strand == "+", fill = stage, linetype = is_latent),
-      arrowhead_height = unit(3,"mm"),
-      color = "black", size = 0.3
+      arrowhead_height = unit(2,"mm"),
+      color = "grey30", size = 0.25
     )
 
   if (has_annots) {
@@ -541,7 +672,7 @@ if (!is.null(genes)) {
       point.padding    = 0.2 * ifelse(is.na(opt$gene_label_padding), 1.0, opt$gene_label_padding),
       force            = 1   * ifelse(is.na(opt$gene_label_force),   1.0, opt$gene_label_force),
       max.overlaps     = Inf,
-      size             = 3,
+      size             = 5,
       seed             = opt$seed,
       inherit.aes      = FALSE
     )
@@ -567,6 +698,26 @@ if (!is.na(midGap)) {
 p <- p +
   geom_vline(xintercept = c(min(mat$bp, na.rm=TRUE), max(mat$bp, na.rm=TRUE)),
              color = "gray90", linewidth = 0.3)
+
+# Draw right-side control ticks on top of border
+if (exists("ctrl_ticks_df") && nrow(ctrl_ticks_df) > 0) {
+  p <- p +
+    geom_segment(
+      data = ctrl_ticks_df,
+      aes(x = x0, xend = x1, y = y, yend = y),
+      inherit.aes = FALSE,
+      linewidth = 0.3,
+      color = "black"
+    ) +
+    geom_text(
+      data = ctrl_ticks_df %>% dplyr::filter(tick_val > 0),
+      aes(x = x1 + ctrl_span * 0.0015, y = y, label = tick_val),
+      inherit.aes = FALSE,
+      size = 5,
+      hjust = 0,
+      color = "black"
+    )
+}
 
 # (F) axes
 # Compute robust x breaks: if kb_step is too large for the span (or <=0),
@@ -598,7 +749,7 @@ p <- p +
 # (G) theme & title (exact match)
 p <- p +
   labs(title = opt$title, y = NULL) +
-  coord_cartesian(expand = FALSE) +
+  coord_cartesian(xlim = c(min(mat$bp, na.rm = TRUE), max(mat$bp, na.rm = TRUE)), expand = FALSE, clip = "off") +
   theme_classic(base_size = 13) +
   theme(
     axis.text.y      = element_text(size = opt$ytext_size),
@@ -609,6 +760,9 @@ p <- p +
     legend.title     = element_text(size = opt$legend_title_size),
     legend.text      = element_text(size = opt$legend_text_size),
     legend.position  = "right",
+    axis.line       = element_line(linewidth = 0.6, colour = "black"),
+    axis.ticks      = element_line(linewidth = 0.6, colour = "black"),
+    panel.border    = element_rect(colour = "black", fill = NA, linewidth = 0.6),
     panel.grid       = element_blank()
   )
 

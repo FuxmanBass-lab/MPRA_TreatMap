@@ -2,3 +2,7 @@
 /data/treatments_effect/*.tsv
 /data/*.tsv
 /results/*/*
+/CRE_Builder/*/*
+/CRE_Builder/*
+/downstream/*
+/results_heatmapctrl/*/*

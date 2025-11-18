@@ -18,11 +18,18 @@ TREAT_LFC=0.585
 DNA_THRESHOLD=50
 VERBOSE="--verbose"
 
+# To plot control tracks as line plots instead of heatmap, set:
+# CONTROL_LINE="--control-line --control-line-scale=0.15"
+CONTROL_LINE=" --control-line --control-line-scale=0.15"
+
 # Default condition set (11-condition panel)
-DEF_CONDS="Awater,Kwater,ILB1,INFa,INFg,POLYDADT,SENDAI,TNF"
-DEF_CTLS="Awater,Kwater"
-DEF_ORDER="Kwater,ILB1,INFg,TNF,Awater,INFa,POLYDADT,SENDAI"
-DEF_KB_STEP=2000
+#DEF_CONDS="Awater,Kwater,ILB1,INFa,INFg,POLYDADT,SENDAI,TNF"
+#DEF_CTLS="Awater,Kwater"
+#DEF_ORDER="Kwater,Awater,ILB1,INFg,TNF,INFa,POLYDADT,SENDAI"
+DEF_CONDS="H2O,DMSO,HeatCtrl,Dex,ABT,DOX,H2O2,MG,Oligo,Heat"
+DEF_CTLS="H2O,DMSO,HeatCtrl"
+DEF_ORDER="H2O,DMSO,HeatCtrl,Dex,ABT,DOX,H2O2,MG,Oligo,Heat"
+DEF_KB_STEP=10000
 
 # ---------------------------
 # Per‑virus configuration
@@ -53,7 +60,7 @@ MAP[EBV]=../data/strands/ebv_strands_match.csv
 ACCESSION[EBV]=NC_007605.1
 PREFIX[EBV]=EBV
 GENES_BED[EBV]=../results/EBV/EBV_nearby_genes.bed
-GENES_ANNO[EBV]=../results/EBV/gene_annotations.tsv
+GENES_ANNO[EBV]=../data/gene_kinetics/ebv_gene_annotations.tsv
 TITLE[EBV]="MPRA Differential Activity – EBV"
 GENE_SCALE[EBV]=1.5
 
@@ -62,17 +69,17 @@ MAP[HCMV]=../data/strands/hcmv_strands_match.csv
 ACCESSION[HCMV]=FJ616285.1
 PREFIX[HCMV]=HCMV
 GENES_BED[HCMV]=../results/HCMV/HCMV_nearby_genes.bed
-GENES_ANNO[HCMV]=../results/HCMV/gene_annotations.tsv
+GENES_ANNO[HCMV]=../data/gene_kinetics/hcmv_gene_annotations.tsv
 TITLE[HCMV]="MPRA Differential Activity – HCMV"
-EXTRA_STD[HCMV]="--height=18 --width=22 --gene-gap 0.5 --gene-label-nudge 6 --gene-label-padding 1.5 --gene-label-force 1.5"
-EXTRA_COMB[HCMV]="--height=18 --width=22 --gene-gap 0.5 --gene-label-nudge 1 --gene-label-padding 1.5 --gene-label-force 1.5"
+EXTRA_STD[HCMV]="--height=18 --width=22 --gene-gap 1.5 --gene-label-nudge 1 --gene-label-padding 1.5 --gene-label-force 1.5"
+EXTRA_COMB[HCMV]="--height=14 --width=22 --gene-gap 1.5 --gene-label-nudge 1 --gene-label-padding 1.5 --gene-label-force 1.5"
 
 # --- KHSV ---
 MAP[KHSV]=../data/strands/khsv_strands_match.csv
 ACCESSION[KHSV]=MZ712172.1
 PREFIX[KHSV]=KHSV
 GENES_BED[KHSV]=../results/KHSV/KHSV_nearby_genes.bed
-GENES_ANNO[KHSV]=../results/KHSV/gene_annotations.tsv
+GENES_ANNO[KHSV]=../data/gene_kinetics/kshv_gene_annotations.tsv
 TITLE[KHSV]="MPRA Differential Activity – KHSV"
 GENE_SCALE[KHSV]=1.5
 
@@ -81,7 +88,7 @@ MAP[VZV]=../data/strands/vzv_strands_match.csv
 ACCESSION[VZV]=KU926311.1
 PREFIX[VZV]=VZV
 GENES_BED[VZV]=../results/VZV/VZV_nearby_genes.bed
-GENES_ANNO[VZV]=../results/VZV/gene_annotations.tsv
+GENES_ANNO[VZV]=../data/gene_kinetics/vzv_gene_annotations.tsv
 TITLE[VZV]="MPRA Differential Activity – VZV"
 GENE_SCALE[VZV]=1.5
 
@@ -90,7 +97,7 @@ MAP[HSV1]=../data/strands/hsv1_strands_match.csv
 ACCESSION[HSV1]=KT899744.1
 PREFIX[HSV1]=HSV1
 GENES_BED[HSV1]=../results/HSV1/HSV1_nearby_genes.bed
-GENES_ANNO[HSV1]=../results/HSV1/gene_annotations.tsv
+GENES_ANNO[HSV1]=../data/gene_kinetics/hsv1_gene_annotations.tsv
 TITLE[HSV1]="MPRA Differential Activity – HSV1"
 GENE_SCALE[HSV1]=1.5
 TITLE_COMB[HSV1]="MPRA Differential Activity – HSV1 KOS (combined)"
@@ -404,6 +411,12 @@ run_pipeline_for() {
                     --order "${order}"
                     --kb-step "${DEF_KB_STEP}"
                     --title "${title}" )
+  # expand control-line flags if set
+  if [[ -n "${CONTROL_LINE}" ]]; then
+    # shellcheck disable=SC2206
+    extra_ctrl=( ${CONTROL_LINE} )
+    plot_args+=( "${extra_ctrl[@]}" )
+  fi
 
   # genes bed
   if [[ -n "${genes_bed}" ]]; then
@@ -436,9 +449,12 @@ run_pipeline_for() {
   if [[ "${run_combined}" == "yes" ]]; then
     echo "[i] ${key}: plot (combined)"
     # Use combined title override if provided
-    plot_args_comb=( "${plot_args[@]}" )
-    # Replace last occurrence of --title value by rebuilding pair
     plot_args_comb=( "--matrix" "${matrix_file}" "--conditions" "${conds}" "--controls" "${ctls}" "--order" "${order}" "--kb-step" "${DEF_KB_STEP}" "--title" "${title_comb}" )
+    if [[ -n "${CONTROL_LINE}" ]]; then
+      # shellcheck disable=SC2206
+      extra_ctrl_comb=( ${CONTROL_LINE} )
+      plot_args_comb+=( "${extra_ctrl_comb[@]}" )
+    fi
 
     # Choose extra args for combined
     local combined_extras
